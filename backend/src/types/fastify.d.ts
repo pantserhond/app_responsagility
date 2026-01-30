@@ -1,4 +1,6 @@
 import 'fastify'
+import { SupabaseClient } from '@supabase/supabase-js'
+import OpenAI from 'openai'
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -7,11 +9,14 @@ declare module 'fastify' {
       port: number
       supabase: {
         url: string
-        serviceAnonKey: string
+        serviceRoleKey: string
       }
       openai: {
         apiKey: string
       }
     }
+
+    supabase: SupabaseClient
+    openai: OpenAI
   }
 }
