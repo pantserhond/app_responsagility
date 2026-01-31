@@ -1,3 +1,5 @@
+import { SupabaseClient } from '@supabase/supabase-js'
+
 export type ReflectionStep =
   | 'react'
   | 'respond'
@@ -110,5 +112,33 @@ export function startDailyReflection(
     },
     nextPrompt: PROMPTS.react,
     completed: false
+  }
+}
+
+export async function getDailyReflection(
+  supabase: SupabaseClient,
+  clientId: string,
+  date: string
+) {
+  const { data, error } = await supabase
+    .from('daily_reflections')
+    .select(
+      'reflection_date, react, respond, notice, learn, daily_mirror'
+    )
+    .eq('client_id', clientId)
+    .eq('reflection_date', date)
+    .single()
+
+  if (error || !data) {
+    return null
+  }
+
+  return {
+    date: data.reflection_date,
+    react: data.react,
+    respond: data.respond,
+    notice: data.notice,
+    learn: data.learn,
+    mirror: data.daily_mirror,
   }
 }

@@ -5,6 +5,7 @@ import {
   ReflectionState
 } from '../../domain/reflections/flow'
 import { generateDailyMirror } from '../../domain/reflections/mirror'
+import { getDailyReflection } from '../../domain/reflections/flow'
 
 interface PracticeAnswerBody {
   clientId: string
@@ -140,6 +141,61 @@ export async function practiceRoutes(app: FastifyInstance) {
         type: 'question',
         text: flowResult.nextPrompt
       })
+    }
+  )
+
+  app.get(
+    '/practice/reflection/:clientId/:date',
+    async (request, reply) => {
+      const { clientId, date } = request.params as {
+        clientId: string
+        date: string
+      }
+
+      const supabase = request.server.supabase
+      const reflection = await getDailyReflection(supabase, clientId, date)
+
+      if (!reflection) {
+        return reply.code(404).send({
+          error: 'Reflection not found',
+        })
+      }
+
+      return {
+        date,
+        react: reflection.react,
+        respond: reflection.respond,
+        notice: reflection.notice,
+        learn: reflection.learn,
+        mirror: reflection.mirror,
+      }
+    }
+  )
+
+  app.get(
+    '/practice/reflections/:clientId',
+    async (request, reply) => {
+      const { clientId } = request.params as {
+        clientId: string
+      }
+
+      const supabase = request.server.supabase
+
+      const { data, error } = await supabase
+        .from('daily_reflections')
+        .select('reflection_date')
+        .eq('client_id', clientId)
+        .order('reflection_date', { ascending: true })
+
+      if (error) {
+        return reply.code(500).send({
+          error: 'Failed to fetch reflection dates',
+        })
+      }
+
+      return {
+        dates: data.map((row) => row.reflection_date),
+      }
     }
   )
 }

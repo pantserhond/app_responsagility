@@ -9,6 +9,7 @@ import {
   ScrollView,
   Platform,
 } from 'react-native'
+import { useRouter } from 'expo-router'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useFonts, EBGaramond_400Regular } from '@expo-google-fonts/eb-garamond'
@@ -32,6 +33,13 @@ const STORAGE_KEY = `responsagility-chat-${new Date()
   .toISOString()
   .slice(0, 10)}`
 
+const TYPING_FONT_FAMILY = Platform.select({
+  ios: 'System',
+  android: 'Roboto',
+  web: 'system-ui',
+  default: 'System',
+})
+
 export default function PracticeScreen() {
   const [fontsLoaded] = useFonts({
     EBGaramond_400Regular,
@@ -45,6 +53,10 @@ export default function PracticeScreen() {
 
   const scrollRef = useRef<ScrollView>(null)
   const [suppressAutoScroll, setSuppressAutoScroll] = useState(false)
+
+  const router = useRouter()
+  const [showCompletionModal, setShowCompletionModal] = useState(false)
+  const hasShownCompletionModal = useRef(false)
 
   /* ---------- Load today's messages ---------- */
   useEffect(() => {
@@ -136,12 +148,27 @@ export default function PracticeScreen() {
         setCompleted(true)
         setSuppressAutoScroll(true)
         addAiMessage(data.text)
+
+        // Let the mirror render first, then show modal
+        setTimeout(() => {
+          setShowCompletionModal(true)
+        }, 300)
+
         return
       }
 
       if (data.type === 'mirror') {
         setSuppressAutoScroll(true)
         addAiMessage(data.text)
+
+        if (!hasShownCompletionModal.current) {
+          hasShownCompletionModal.current = true
+
+          setTimeout(() => {
+            setShowCompletionModal(true)
+          }, 300)
+        }
+
         return
       }
 
@@ -206,7 +233,7 @@ export default function PracticeScreen() {
                 style={styles.input}
                 multiline
                 placeholder="Type your response…"
-                placeholderTextColor="#888"
+                placeholderTextColor="#6f6f6f"
                 value={input}
                 onChangeText={setInput}
                 editable={!completed}
@@ -225,6 +252,32 @@ export default function PracticeScreen() {
               </TouchableOpacity>
             </View>
           </KeyboardAvoidingView>
+
+          {showCompletionModal && (
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalCard}>
+                <Text style={styles.modalTitle}>
+                  Thank you for completing today’s reflection.
+                </Text>
+
+                <Text style={styles.modalText}>
+                  Your Daily Reflection is ready.
+                </Text>
+
+                <TouchableOpacity
+                  style={styles.modalButton}
+                  onPress={() => {
+                    setShowCompletionModal(false)
+                    router.push(`/reflection/${new Date().toISOString().slice(0, 10)}`)
+                  }}
+                >
+                  <Text style={styles.modalButtonText}>
+                    View my reflection
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
         </SafeAreaView>
       )}
     </>
@@ -307,9 +360,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     color: '#505050',
 
-    fontSize: 20,
-    lineHeight: 27,
-    fontFamily: 'EBGaramond_400Regular',
+    fontSize: 18,
+    lineHeight: 25,
+    fontFamily: TYPING_FONT_FAMILY,
 
     minHeight: 56,   // ~2 lines
     maxHeight: 120,  // ~4–5 lines
@@ -332,6 +385,55 @@ const styles = StyleSheet.create({
   sendIcon: {
     color: '#ffffff',
     fontSize: 18,
+    fontWeight: '600',
+  },
+
+  modalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  modalCard: {
+    width: '85%',
+    backgroundColor: '#ffffff',
+    padding: 24,
+    borderRadius: 18,
+    alignItems: 'center',
+  },
+
+  modalTitle: {
+    fontFamily: 'EBGaramond_400Regular',
+    fontSize: 22,
+    color: '#505050',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+
+  modalText: {
+    fontFamily: 'EBGaramond_400Regular',
+    fontSize: 18,
+    color: '#505050',
+    textAlign: 'center',
+    opacity: 0.8,
+    marginBottom: 24,
+  },
+
+  modalButton: {
+    backgroundColor: '#9fb86a',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 22,
+  },
+
+  modalButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
     fontWeight: '600',
   },
 })
