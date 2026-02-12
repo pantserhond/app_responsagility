@@ -2,13 +2,13 @@ import { FastifyInstance } from 'fastify'
 import {
   advanceFlow,
   ReflectionStep,
-  ReflectionState
+  ReflectionState,
+  PROMPTS
 } from '../../domain/reflections/flow'
 import { generateDailyMirror } from '../../domain/reflections/mirror'
 import { getDailyReflection } from '../../domain/reflections/flow'
 
 interface PracticeAnswerBody {
-  clientId: string
   date: string // YYYY-MM-DD
   userInput: string
 }
@@ -16,8 +16,10 @@ interface PracticeAnswerBody {
 export async function practiceRoutes(app: FastifyInstance) {
   app.post<{ Body: PracticeAnswerBody }>(
     '/practice/answer',
+    { preHandler: app.authenticate },
     async (request, reply) => {
-      const { clientId, date, userInput } = request.body
+      const { date, userInput } = request.body
+      const clientId = request.user.id
 
       /*
         Load or create today's reflection
@@ -110,13 +112,56 @@ export async function practiceRoutes(app: FastifyInstance) {
 
       /*
         If review step reached, generate mirror
+        But first verify all 4 answers exist
       */
       if (flowResult.nextState?.step === 'review') {
+        // Re-fetch the reflection to get all saved answers
+        const { data: updatedReflection } = await app.supabase
+          .from('daily_reflections')
+          .select('*')
+          .eq('id', reflection.id)
+          .single()
+
+        // Validate all 4 answers exist before generating mirror
+        const answers = {
+          react: updatedReflection?.react,
+          respond: updatedReflection?.respond,
+          notice: updatedReflection?.notice,
+          learn: userInput, // This was just submitted
+        }
+
+        const missingAnswers = Object.entries(answers)
+          .filter(([_, value]) => !value || value.trim().length === 0)
+          .map(([key]) => key)
+
+        if (missingAnswers.length > 0) {
+          // Not all answers provided - go back to the first missing step
+          console.error(`Missing answers for mirror generation: ${missingAnswers.join(', ')}`)
+
+          // Find the first missing step and go back to it
+          const stepOrder: ReflectionStep[] = ['react', 'respond', 'notice', 'learn']
+          const firstMissing = stepOrder.find(step => missingAnswers.includes(step)) || 'react'
+
+          await app.supabase
+            .from('daily_reflections')
+            .update({
+              step: firstMissing,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', reflection.id)
+
+          return reply.send({
+            type: 'question',
+            text: PROMPTS[firstMissing]
+          })
+        }
+
+        // All answers validated - safe to cast
         const mirrorText = await generateDailyMirror({
-          react: reflection.react,
-          respond: reflection.respond,
-          notice: reflection.notice,
-          learn: userInput,
+          react: answers.react!,
+          respond: answers.respond!,
+          notice: answers.notice!,
+          learn: answers.learn!,
         })
 
         await app.supabase
@@ -145,12 +190,11 @@ export async function practiceRoutes(app: FastifyInstance) {
   )
 
   app.get(
-    '/practice/reflection/:clientId/:date',
+    '/practice/reflection/:date',
+    { preHandler: app.authenticate },
     async (request, reply) => {
-      const { clientId, date } = request.params as {
-        clientId: string
-        date: string
-      }
+      const { date } = request.params as { date: string }
+      const clientId = request.user.id
 
       const supabase = request.server.supabase
       const reflection = await getDailyReflection(supabase, clientId, date)
@@ -173,11 +217,10 @@ export async function practiceRoutes(app: FastifyInstance) {
   )
 
   app.get(
-    '/practice/reflections/:clientId',
+    '/practice/reflections',
+    { preHandler: app.authenticate },
     async (request, reply) => {
-      const { clientId } = request.params as {
-        clientId: string
-      }
+      const clientId = request.user.id
 
       const supabase = request.server.supabase
 

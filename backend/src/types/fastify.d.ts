@@ -1,6 +1,12 @@
 import 'fastify'
 import { SupabaseClient } from '@supabase/supabase-js'
 import OpenAI from 'openai'
+import { FastifyRequest, FastifyReply } from 'fastify'
+
+export interface AuthUser {
+  id: string
+  email: string
+}
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -18,5 +24,10 @@ declare module 'fastify' {
 
     supabase: SupabaseClient
     openai: OpenAI
+    authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>
+  }
+
+  interface FastifyRequest {
+    user: AuthUser
   }
 }

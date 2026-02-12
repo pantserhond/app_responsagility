@@ -35,3 +35,9 @@ tmp/
 
 # App
 .expo
+
+# Claude
+.agents/
+.claude/
+.codex/
+.opencode/

@@ -1,439 +1,405 @@
-import { useEffect, useRef, useState } from 'react'
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  KeyboardAvoidingView,
-  ScrollView,
-  Platform,
-} from 'react-native'
-import { useRouter } from 'expo-router'
-import AsyncStorage from '@react-native-async-storage/async-storage'
-import { SafeAreaView } from 'react-native-safe-area-context'
-import { useFonts, EBGaramond_400Regular } from '@expo-google-fonts/eb-garamond'
+import { useEffect, useState, useCallback } from 'react';
+import { View, Text, StyleSheet, ActivityIndicator, Platform, KeyboardAvoidingView, TouchableOpacity } from 'react-native';
+import { useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFonts, EBGaramond_400Regular } from '@expo-google-fonts/eb-garamond';
+import * as Haptics from 'expo-haptics';
+
+import PracticeTileContainer, {
+  Answers,
+  ReflectionStep,
+  STEPS,
+} from '@/components/practice/PracticeTileContainer';
+import CompletedState from '@/components/practice/CompletedState';
+import ThankYouOverlay from '@/components/practice/ThankYouOverlay';
+import ReviewOverlay from '@/components/practice/ReviewOverlay';
+import ReadyPrompt from '@/components/practice/ReadyPrompt';
+import { WarmPalette, DarkWarmPalette } from '@/constants/theme';
+import { getPracticeKey, getTodayKey } from '@/constants/storage';
+import { useAppTheme } from '@/hooks/use-app-theme';
+import { useApi, API_BASE } from '@/hooks/use-api';
 
 type ApiResponse =
   | { type: 'question'; text: string }
   | { type: 'mirror'; text: string }
-  | { type: 'completed'; text: string }
+  | { type: 'completed'; text: string };
 
-type Message = {
-  id: string
-  role: 'ai' | 'user'
-  text: string
+interface PracticeData {
+  answers: Answers;
+  draftAnswers: Answers;
+  currentStep: number;
+  mirror: string | null;
+  completed: boolean;
+  isReady: boolean;
 }
 
-function uid() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
-}
-
-const STORAGE_KEY = `responsagility-chat-${new Date()
-  .toISOString()
-  .slice(0, 10)}`
-
-const TYPING_FONT_FAMILY = Platform.select({
-  ios: 'System',
-  android: 'Roboto',
-  web: 'system-ui',
-  default: 'System',
-})
+const initialAnswers: Answers = {
+  react: '',
+  respond: '',
+  notice: '',
+  learn: '',
+};
 
 export default function PracticeScreen() {
-  const [fontsLoaded] = useFonts({
-    EBGaramond_400Regular,
-  })
+  const router = useRouter();
+  const [fontsLoaded] = useFonts({ EBGaramond_400Regular });
+  const theme = useAppTheme();
+  const palette = theme === 'dark' ? DarkWarmPalette : WarmPalette;
+  const { post, get } = useApi();
 
-  const [messages, setMessages] = useState<Message[]>([])
-  const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [completed, setCompleted] = useState(false)
-  const [hasUserStarted, setHasUserStarted] = useState(false)
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSending, setIsSending] = useState(false);
+  const [answers, setAnswers] = useState<Answers>(initialAnswers);
+  const [draftAnswers, setDraftAnswers] = useState<Answers>(initialAnswers);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [editingStep, setEditingStep] = useState<number | null>(null);
+  const [mirror, setMirror] = useState<string | null>(null);
+  const [isCompleted, setIsCompleted] = useState(false);
+  const [showCompletedState, setShowCompletedState] = useState(false);
+  const [showThankYou, setShowThankYou] = useState(false);
+  const [showReview, setShowReview] = useState(false);
+  const [isGeneratingMirror, setIsGeneratingMirror] = useState(false);
+  const [isReady, setIsReady] = useState(false);
 
-  const scrollRef = useRef<ScrollView>(null)
-  const [suppressAutoScroll, setSuppressAutoScroll] = useState(false)
+  const todayKey = getTodayKey();
 
-  const router = useRouter()
-  const [showCompletionModal, setShowCompletionModal] = useState(false)
-  const hasShownCompletionModal = useRef(false)
+  const resetTodayForTesting = async () => {
+    try {
+      await AsyncStorage.removeItem(getPracticeKey(todayKey));
+      setAnswers(initialAnswers);
+      setDraftAnswers(initialAnswers);
+      setCurrentStep(0);
+      setEditingStep(null);
+      setMirror(null);
+      setIsCompleted(false);
+      setShowCompletedState(false);
+      setShowThankYou(false);
+      setShowReview(false);
+      setIsGeneratingMirror(false);
+      setIsReady(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      console.error('Failed to reset:', error);
+    }
+  };
 
-  /* ---------- Load today's messages ---------- */
+  // Handle user ready to start reflection
+  const handleReady = useCallback(() => {
+    setIsReady(true);
+    // State change will trigger save via useEffect
+  }, []);
+
+  // Handle user not ready - navigate to Reflections tab
+  const handleNotNow = useCallback(() => {
+    router.push('/reflections');
+  }, [router]);
+
+  // Handle draft changes (auto-save as user types)
+  const handleDraftChange = useCallback((step: ReflectionStep, value: string) => {
+    setDraftAnswers(prev => ({ ...prev, [step]: value }));
+  }, []);
+
+  // Load today's practice data
   useEffect(() => {
-    ;(async () => {
-      const stored = await AsyncStorage.getItem(STORAGE_KEY)
+    loadPracticeData();
+  }, []);
 
+  // Persist practice data (including isReady and drafts)
+  useEffect(() => {
+    if (!isLoading) {
+      savePracticeData();
+    }
+  }, [answers, draftAnswers, currentStep, mirror, isCompleted, isReady]);
+
+  const loadPracticeData = async () => {
+    try {
+      const stored = await AsyncStorage.getItem(getPracticeKey(todayKey));
       if (stored) {
-        const parsed = JSON.parse(stored)
-        setMessages(parsed.messages)
-        setCompleted(parsed.completed)
-      } else {
-        setMessages([
-          {
-            id: uid(),
-            role: 'ai',
-            text: 'Where did you react from your ego today?',
-          },
-        ])
+        const data: PracticeData = JSON.parse(stored);
+        setAnswers(data.answers || initialAnswers);
+        setDraftAnswers(data.draftAnswers || data.answers || initialAnswers);
+        setCurrentStep(data.currentStep || 0);
+        setMirror(data.mirror);
+        setIsCompleted(data.completed || false);
+        setIsReady(data.isReady || false);
+
+        // If already completed, show the completed state
+        if (data.completed && data.mirror) {
+          setShowCompletedState(true);
+        }
       }
-    })()
-  }, [])
-
-  /* ---------- Persist messages ---------- */
-  useEffect(() => {
-    if (messages.length === 0) return
-
-    AsyncStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ messages, completed })
-    )
-  }, [messages, completed])
-
-  /* ---------- Auto-scroll (not during typing) ---------- */
-  useEffect(() => {
-    if (hasUserStarted && !suppressAutoScroll) {
-      scrollRef.current?.scrollToEnd({ animated: true })
+    } catch (error) {
+      console.error('Failed to load practice data:', error);
+    } finally {
+      setIsLoading(false);
     }
-  }, [messages, hasUserStarted, suppressAutoScroll])
+  };
 
-  function addAiMessage(text: string) {
-    setMessages((prev) => [
-      ...prev,
-      { id: uid(), role: 'ai', text },
-    ])
-  }
-
-  async function resetTodayForTesting() {
-    await AsyncStorage.removeItem(STORAGE_KEY)
-    setMessages([
-      {
-        id: uid(),
-        role: 'ai',
-        text: 'Where did you react from your ego today?',
-      },
-    ])
-    setCompleted(false)
-    setInput('')
-  }
-
-  async function sendAnswer() {
-    if (!input.trim() || completed || loading) return
-
-    const userMessage: Message = {
-      id: uid(),
-      role: 'user',
-      text: input,
+  const savePracticeData = async () => {
+    try {
+      const data: PracticeData = {
+        answers,
+        draftAnswers,
+        currentStep,
+        mirror,
+        completed: isCompleted,
+        isReady,
+      };
+      await AsyncStorage.setItem(getPracticeKey(todayKey), JSON.stringify(data));
+    } catch (error) {
+      console.error('Failed to save practice data:', error);
     }
+  };
 
-    setHasUserStarted(true)
+  const handleSubmitAnswer = useCallback(
+    async (step: ReflectionStep, answer: string) => {
+      const stepIndex = STEPS.indexOf(step);
+      const isEditing = editingStep !== null;
+      const isLastQuestion = stepIndex === STEPS.length - 1; // 'learn' is the last question
 
-    setMessages((prev) => [...prev, userMessage])
-    setInput('')
-    setLoading(true)
+      // Update local state immediately
+      setAnswers((prev) => ({ ...prev, [step]: answer }));
+      // Also update draft to match
+      setDraftAnswers((prev) => ({ ...prev, [step]: answer }));
+
+      // If editing, just cancel edit mode (don't sync to backend yet - wait for review)
+      if (isEditing) {
+        setEditingStep(null);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        return;
+      }
+
+      // For questions 1-3: Advance to next question (don't sync to backend yet)
+      if (!isLastQuestion) {
+        const nextStep = stepIndex + 1;
+        setCurrentStep(nextStep);
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        return;
+      }
+
+      // Last question - show thank you overlay, then review screen
+      setShowThankYou(true);
+    },
+    [editingStep]
+  );
+
+  // Handle continuing from thank you to review screen
+  const handleThankYouContinue = useCallback(() => {
+    setShowThankYou(false);
+    setShowReview(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }, []);
+
+  // Handle editing an answer in the review screen
+  const handleReviewEdit = useCallback((step: ReflectionStep, newAnswer: string) => {
+    setAnswers((prev) => ({ ...prev, [step]: newAnswer }));
+    setDraftAnswers((prev) => ({ ...prev, [step]: newAnswer }));
+  }, []);
+
+  // Handle confirming and submitting all answers from review screen
+  const handleReviewConfirm = useCallback(async () => {
+    setIsGeneratingMirror(true);
 
     try {
-      const res = await fetch('http://192.168.110.202:3000/practice/answer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          clientId: 'test-user',
-          date: new Date().toISOString().slice(0, 10),
-          userInput: userMessage.text,
-        }),
-      })
-
-      const data: ApiResponse = await res.json()
-
-      if (data.type === 'completed') {
-        setCompleted(true)
-        setSuppressAutoScroll(true)
-        addAiMessage(data.text)
-
-        // Let the mirror render first, then show modal
-        setTimeout(() => {
-          setShowCompletionModal(true)
-        }, 300)
-
-        return
+      // Submit all answers to the backend
+      for (const step of STEPS) {
+        await post('/practice/answer', {
+          date: todayKey,
+          userInput: answers[step],
+        });
       }
 
-      if (data.type === 'mirror') {
-        setSuppressAutoScroll(true)
-        addAiMessage(data.text)
+      // The last answer should trigger mirror generation
+      // Fetch the mirror
+      const data = await get<{ mirror?: string }>(`/practice/reflection/${todayKey}`);
 
-        if (!hasShownCompletionModal.current) {
-          hasShownCompletionModal.current = true
-
-          setTimeout(() => {
-            setShowCompletionModal(true)
-          }, 300)
-        }
-
-        return
+      if (data.mirror) {
+        setMirror(data.mirror);
+        setIsCompleted(true);
+        setShowReview(false);
+        setCurrentStep(STEPS.length); // Move to mirror tile
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } else {
+        // Mirror not ready yet, might need to wait
+        console.warn('Mirror not ready after submission');
+        setMirror('Your reflection is being prepared...');
+        setIsCompleted(true);
+        setShowReview(false);
+        setCurrentStep(STEPS.length);
       }
-
-      if (data.type === 'question') {
-        setSuppressAutoScroll(false)
-        addAiMessage(data.text)
-      }
-    } catch {
-      addAiMessage('Something went wrong. Please try again.')
+    } catch (error) {
+      console.error('Failed to submit answers:', error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
-      setLoading(false)
+      setIsGeneratingMirror(false);
     }
+  }, [answers, todayKey, post, get]);
+
+  const handleEditStep = useCallback((stepIndex: number) => {
+    setEditingStep(stepIndex);
+    setCurrentStep(stepIndex);
+  }, []);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditingStep(null);
+  }, []);
+
+  const handleViewReflection = useCallback(() => {
+    router.push(`/reflection/${todayKey}`);
+  }, [router, todayKey]);
+
+  const handlePageChange = useCallback((page: number) => {
+    // Only allow navigating to completed steps or current step
+    const completedStepsCount = STEPS.filter(
+      (step) => answers[step].trim().length > 0
+    ).length;
+
+    // Allow viewing any completed step or the next step to answer
+    if (page <= completedStepsCount || (mirror && page === STEPS.length)) {
+      setCurrentStep(page);
+    }
+  }, [answers, mirror]);
+
+  const handleCompletedNavigate = useCallback(() => {
+    router.push(`/reflection/${todayKey}`);
+  }, [router, todayKey]);
+
+  // Show loading state
+  if (!fontsLoaded || isLoading) {
+    return (
+      <View style={[styles.loadingContainer, { backgroundColor: palette.background.primary }]}>
+        <ActivityIndicator size="large" color={palette.accent.primary} />
+      </View>
+    );
+  }
+
+  // Show completed celebration if already done today
+  if (showCompletedState) {
+    return (
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background.primary }]} edges={['top']}>
+        <CompletedState onNavigate={handleCompletedNavigate} theme={theme} />
+        {__DEV__ && (
+          <TouchableOpacity
+            onPress={resetTodayForTesting}
+            style={[styles.devButton, { backgroundColor: palette.text.muted }]}
+          >
+            <Text style={styles.devButtonText}>Reset day</Text>
+          </TouchableOpacity>
+        )}
+      </SafeAreaView>
+    );
+  }
+
+  // Show ready prompt if user hasn't confirmed they're ready
+  if (!isReady) {
+    return (
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background.primary }]} edges={['top']}>
+        <ReadyPrompt
+          onReady={handleReady}
+          onNotNow={handleNotNow}
+          theme={theme}
+        />
+      </SafeAreaView>
+    );
   }
 
   return (
-    <>
-      {!fontsLoaded ? null : (
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#f2efeb' }}>
-          <KeyboardAvoidingView
-            style={{ flex: 1 }}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
-          >
-            <ScrollView
-              ref={scrollRef}
-              contentContainerStyle={styles.container}
-              keyboardShouldPersistTaps="handled"
-              contentInset={{ bottom: 80 }}
-            >
-              {messages.map((msg) => (
-                <View
-                  key={msg.id}
-                  style={[
-                    styles.message,
-                    msg.role === 'ai' ? styles.aiMessage : styles.userMessage,
-                  ]}
-                >
-                  <Text style={msg.role === 'ai' ? styles.aiText : styles.userText}>
-                    {msg.text}
-                  </Text>
-                </View>
-              ))}
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background.primary }]} edges={['top']}>
+      <KeyboardAvoidingView
+        style={styles.keyboardView}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+      >
+        <PracticeTileContainer
+          answers={answers}
+          draftAnswers={draftAnswers}
+          mirror={mirror}
+          currentStep={currentStep}
+          editingStep={editingStep}
+          isLoading={isSending}
+          onSubmitAnswer={handleSubmitAnswer}
+          onDraftChange={handleDraftChange}
+          onEditStep={handleEditStep}
+          onCancelEdit={handleCancelEdit}
+          onViewReflection={handleViewReflection}
+          onPageChange={handlePageChange}
+          theme={theme}
+        />
+      </KeyboardAvoidingView>
 
-              {completed && (
-                <Text style={styles.completedText}>
-                  You’ve completed today’s reflection.
-                </Text>
-              )}
+      {/* Thank You Overlay - shows after completing last question */}
+      <ThankYouOverlay
+        visible={showThankYou}
+        onContinue={handleThankYouContinue}
+        theme={theme}
+      />
 
-              {__DEV__ && (
-                <TouchableOpacity
-                  onPress={resetTodayForTesting}
-                  style={{ marginBottom: 12 }}
-                >
-                  <Text style={styles.devText}>🔄 Reset today (dev only)</Text>
-                </TouchableOpacity>
-              )}
-            </ScrollView>
+      {/* Review Overlay - shows after thank you, before mirror generation */}
+      <ReviewOverlay
+        visible={showReview}
+        answers={answers}
+        isGenerating={isGeneratingMirror}
+        onEdit={handleReviewEdit}
+        onConfirm={handleReviewConfirm}
+        theme={theme}
+      />
 
-            <View style={styles.inputBar}>
-              <TextInput
-                style={styles.input}
-                multiline
-                placeholder="Type your response…"
-                placeholderTextColor="#6f6f6f"
-                value={input}
-                onChangeText={setInput}
-                editable={!completed}
-              />
-
-              <TouchableOpacity
-                style={[
-                  styles.sendButton,
-                  (loading || completed || !input.trim()) &&
-                    styles.sendButtonDisabled,
-                ]}
-                onPress={sendAnswer}
-                disabled={loading || completed || !input.trim()}
-              >
-                <Text style={styles.sendIcon}>➤</Text>
-              </TouchableOpacity>
-            </View>
-          </KeyboardAvoidingView>
-
-          {showCompletionModal && (
-            <View style={styles.modalOverlay}>
-              <View style={styles.modalCard}>
-                <Text style={styles.modalTitle}>
-                  Thank you for completing today’s reflection.
-                </Text>
-
-                <Text style={styles.modalText}>
-                  Your Daily Reflection is ready.
-                </Text>
-
-                <TouchableOpacity
-                  style={styles.modalButton}
-                  onPress={() => {
-                    setShowCompletionModal(false)
-                    router.push(`/reflection/${new Date().toISOString().slice(0, 10)}`)
-                  }}
-                >
-                  <Text style={styles.modalButtonText}>
-                    View my reflection
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
-        </SafeAreaView>
+      {__DEV__ && !showThankYou && (
+        <TouchableOpacity
+          onPress={resetTodayForTesting}
+          style={[styles.devButton, { backgroundColor: palette.text.muted }]}
+        >
+          <Text style={styles.devButtonText}>Reset day</Text>
+        </TouchableOpacity>
       )}
-    </>
-  )
+    </SafeAreaView>
+  );
+}
+
+// Dev-only reset button component
+function DevResetButton({ onReset }: { onReset: () => void }) {
+  return (
+    <TouchableOpacity
+      style={styles.devButton}
+      onPress={onReset}
+    >
+      <Text style={styles.devButtonText}>Reset</Text>
+    </TouchableOpacity>
+  );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flexGrow: 1,
-    padding: 24,
-    backgroundColor: '#f2efeb',
+  safeArea: {
+    flex: 1,
+    backgroundColor: WarmPalette.background.primary,
   },
 
-  message: {
-    marginBottom: 20,
-    maxWidth: '85%',
+  keyboardView: {
+    flex: 1,
   },
 
-  aiMessage: {
-    alignSelf: 'flex-start',
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: WarmPalette.background.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  userMessage: {
-    alignSelf: 'flex-end',
-  },
-
-  aiText: {
-    fontFamily: 'EBGaramond_400Regular',
-    color: '#505050',
-    fontSize: 22,
-    lineHeight: 30,
-  },
-
-  userText: {
-    fontFamily: 'EBGaramond_400Regular',
-    color: '#505050',
-    fontSize: 22,
-    lineHeight: 30,
-    backgroundColor: '#ffffff',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 20,
-    borderBottomRightRadius: 6,
-  },
-
-  completedText: {
-    fontFamily: 'EBGaramond_400Regular',
-    color: '#505050',
-    marginVertical: 20,
-    textAlign: 'center',
-    fontSize: 17,
-    opacity: 0.7,
-  },
-
-  devText: {
-    fontFamily: 'EBGaramond_400Regular',
-    color: '#505050',
-    fontSize: 13,
+  devButton: {
+    position: 'absolute',
+    top: 50,
+    right: 16,
+    backgroundColor: WarmPalette.text.muted,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
     opacity: 0.6,
   },
 
-  inputBar: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    backgroundColor: '#f2efeb',
-    borderTopWidth: 1,
-    borderTopColor: '#e0ddd9',
+  devButtonText: {
+    color: '#fff',
+    fontWeight: '500' as const,
+    fontSize: 12,
   },
-
-  input: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#9fb86a',
-    borderRadius: 22,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-
-    backgroundColor: '#ffffff',
-    color: '#505050',
-
-    fontSize: 18,
-    lineHeight: 25,
-    fontFamily: TYPING_FONT_FAMILY,
-
-    minHeight: 56,   // ~2 lines
-    maxHeight: 120,  // ~4–5 lines
-  },
-
-  sendButton: {
-    marginLeft: 10,
-    backgroundColor: '#9fb86a',
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  sendButtonDisabled: {
-    backgroundColor: '#cfcfcf',
-  },
-
-  sendIcon: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-
-  modalOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.25)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  modalCard: {
-    width: '85%',
-    backgroundColor: '#ffffff',
-    padding: 24,
-    borderRadius: 18,
-    alignItems: 'center',
-  },
-
-  modalTitle: {
-    fontFamily: 'EBGaramond_400Regular',
-    fontSize: 22,
-    color: '#505050',
-    textAlign: 'center',
-    marginBottom: 12,
-  },
-
-  modalText: {
-    fontFamily: 'EBGaramond_400Regular',
-    fontSize: 18,
-    color: '#505050',
-    textAlign: 'center',
-    opacity: 0.8,
-    marginBottom: 24,
-  },
-
-  modalButton: {
-    backgroundColor: '#9fb86a',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 22,
-  },
-
-  modalButtonText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-})
+});
