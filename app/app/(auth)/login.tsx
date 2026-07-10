@@ -74,6 +74,11 @@ export default function LoginScreen() {
     router.push('/(auth)/register')
   }, [router])
 
+  const handleForgotPassword = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    router.push('/(auth)/forgot-password')
+  }, [router])
+
   if (!fontsLoaded) {
     return (
       <View style={[styles.loadingContainer, { backgroundColor: palette.background.primary }]}>
@@ -150,6 +155,12 @@ export default function LoginScreen() {
               )}
             </View>
 
+            <TouchableOpacity style={styles.forgotPassword} onPress={handleForgotPassword}>
+              <Text style={[styles.forgotPasswordText, { color: palette.text.secondary }]}>
+                Forgot password?
+              </Text>
+            </TouchableOpacity>
+
             <TouchableOpacity
               style={[
                 styles.button,
@@ -170,7 +181,7 @@ export default function LoginScreen() {
 
           <View style={styles.footer}>
             <Text style={[styles.footerText, { color: palette.text.secondary }]}>
-              Don't have an account?
+              Don’t have an account?
             </Text>
             <TouchableOpacity onPress={handleNavigateToRegister}>
               <Text style={[styles.footerLink, { color: palette.accent.primary }]}>
@@ -247,6 +258,15 @@ const styles = StyleSheet.create({
   errorText: {
     ...Typography.caption,
     marginLeft: Spacing.xs,
+  },
+
+  forgotPassword: {
+    alignSelf: 'flex-end',
+  },
+
+  forgotPasswordText: {
+    ...Typography.caption,
+    fontWeight: '500',
   },
 
   button: {

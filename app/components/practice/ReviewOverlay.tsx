@@ -19,8 +19,10 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WarmPalette, DarkWarmPalette, Spacing, BorderRadius, Typography } from '@/constants/theme';
 import type { AppTheme } from '@/hooks/use-app-theme';
+import { QUESTIONS, STEPS } from './PracticeTileContainer';
 import type { Answers, ReflectionStep } from './PracticeTileContainer';
 
 interface ReviewOverlayProps {
@@ -32,15 +34,6 @@ interface ReviewOverlayProps {
   theme?: AppTheme;
 }
 
-const QUESTIONS: Record<ReflectionStep, string> = {
-  react: 'How did you react to a challenging moment today?',
-  respond: 'How would you have liked to respond instead?',
-  notice: 'What did you notice about yourself in that moment?',
-  learn: 'What will you take forward from this reflection?',
-};
-
-const STEP_ORDER: ReflectionStep[] = ['react', 'respond', 'notice', 'learn'];
-
 export default function ReviewOverlay({
   visible,
   answers,
@@ -50,6 +43,7 @@ export default function ReviewOverlay({
   theme = 'light',
 }: ReviewOverlayProps) {
   const palette = theme === 'dark' ? DarkWarmPalette : WarmPalette;
+  const insets = useSafeAreaInsets();
   const [editingStep, setEditingStep] = useState<ReflectionStep | null>(null);
   const [editValue, setEditValue] = useState('');
 
@@ -83,7 +77,7 @@ export default function ReviewOverlay({
   };
 
   const handleSaveEdit = () => {
-    if (editingStep) {
+    if (editingStep && editValue.trim().length > 0) {
       onEdit(editingStep, editValue.trim());
       setEditingStep(null);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -108,7 +102,7 @@ export default function ReviewOverlay({
         style={styles.keyboardView}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <Animated.View style={[styles.container, contentStyle]}>
+        <Animated.View style={[styles.container, contentStyle, { paddingTop: insets.top + Spacing.md }]}>
           {/* Header */}
           <View style={styles.header}>
             <Text style={[styles.title, { color: palette.text.primary }]}>
@@ -125,7 +119,7 @@ export default function ReviewOverlay({
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
           >
-            {STEP_ORDER.map((step, index) => (
+            {STEPS.map((step, index) => (
               <View
                 key={step}
                 style={[styles.answerCard, { backgroundColor: palette.background.secondary }]}
@@ -238,7 +232,6 @@ const styles = StyleSheet.create({
 
   container: {
     flex: 1,
-    paddingTop: Spacing.xl,
   },
 
   header: {

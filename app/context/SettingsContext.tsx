@@ -13,13 +13,6 @@ export interface AppSettings {
     dailyReminderTime: string; // "HH:mm" format
   };
 
-  // Coach Integration
-  coach: {
-    email: string | null;
-    name: string | null;
-    shareWeeklySummary: boolean;
-  };
-
   // Profile
   profile: {
     displayName: string | null;
@@ -34,11 +27,6 @@ const defaultSettings: AppSettings = {
     dailyReminderEnabled: false,
     dailyReminderTime: '09:00',
   },
-  coach: {
-    email: null,
-    name: null,
-    shareWeeklySummary: false,
-  },
   profile: {
     displayName: null,
     startDate: null,
@@ -50,7 +38,6 @@ interface SettingsContextValue {
   isLoading: boolean;
   updateSettings: (partial: Partial<AppSettings>) => Promise<void>;
   updateNotifications: (partial: Partial<AppSettings['notifications']>) => Promise<void>;
-  updateCoach: (partial: Partial<AppSettings['coach']>) => Promise<void>;
   updateProfile: (partial: Partial<AppSettings['profile']>) => Promise<void>;
   resetSettings: () => Promise<void>;
 }
@@ -115,14 +102,6 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     await saveSettings(newSettings);
   }, [settings]);
 
-  const updateCoach = useCallback(async (partial: Partial<AppSettings['coach']>) => {
-    const newSettings = {
-      ...settings,
-      coach: { ...settings.coach, ...partial },
-    };
-    await saveSettings(newSettings);
-  }, [settings]);
-
   const updateProfile = useCallback(async (partial: Partial<AppSettings['profile']>) => {
     const newSettings = {
       ...settings,
@@ -142,7 +121,6 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         isLoading,
         updateSettings,
         updateNotifications,
-        updateCoach,
         updateProfile,
         resetSettings,
       }}

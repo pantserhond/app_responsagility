@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter, useLocalSearchParams } from 'expo-router'
 import { useFonts, EBGaramond_400Regular } from '@expo-google-fonts/eb-garamond'
 import * as Haptics from 'expo-haptics'
+import * as Linking from 'expo-linking'
 import { Ionicons } from '@expo/vector-icons'
 import { useAppTheme } from '@/hooks/use-app-theme'
 import { WarmPalette, DarkWarmPalette, Spacing, BorderRadius, Typography } from '@/constants/theme'
@@ -60,6 +61,9 @@ export default function VerifyEmailScreen() {
     const { error } = await supabase.auth.resend({
       type: 'signup',
       email: params.email,
+      options: {
+        emailRedirectTo: Linking.createURL('auth/callback'),
+      },
     })
 
     setIsResending(false)
@@ -100,13 +104,13 @@ export default function VerifyEmailScreen() {
 
           {/* Description */}
           <Text style={[styles.description, { color: palette.text.secondary }]}>
-            We've sent a verification link to:
+            We’ve sent a verification link to:
           </Text>
           <Text style={[styles.email, { color: palette.text.primary }]}>
             {params.email || 'your email address'}
           </Text>
           <Text style={[styles.description, { color: palette.text.secondary }]}>
-            Click the link in the email to verify your account, then return here.
+            Tap the link in the email and you’ll be signed in automatically.
           </Text>
 
           {/* Resend Link */}
@@ -119,7 +123,7 @@ export default function VerifyEmailScreen() {
               <ActivityIndicator size="small" color={palette.accent.primary} />
             ) : (
               <Text style={[styles.resendText, { color: palette.accent.primary }]}>
-                Didn't receive it? Resend email
+                Didn’t receive it? Resend email
               </Text>
             )}
           </TouchableOpacity>
@@ -128,16 +132,15 @@ export default function VerifyEmailScreen() {
         {/* Buttons */}
         <View style={styles.buttons}>
           <TouchableOpacity
-            style={[styles.primaryButton, { backgroundColor: palette.accent.primary }]}
+            style={styles.secondaryButton}
             onPress={handleVerified}
             disabled={isChecking}
-            activeOpacity={0.8}
           >
             {isChecking ? (
-              <ActivityIndicator color={palette.text.inverse} />
+              <ActivityIndicator size="small" color={palette.text.secondary} />
             ) : (
-              <Text style={[styles.primaryButtonText, { color: palette.text.inverse }]}>
-                I've Verified My Email
+              <Text style={[styles.secondaryButtonText, { color: palette.text.secondary }]}>
+                I’ve Verified My Email
               </Text>
             )}
           </TouchableOpacity>

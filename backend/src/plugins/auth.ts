@@ -41,7 +41,7 @@ export default fp(async (app) => {
 
       request.user = user
     } catch (error) {
-      app.log.error('JWT verification failed:', error)
+      app.log.error({ err: error }, 'JWT verification failed')
       return reply.status(401).send({ error: 'Invalid or expired token' })
     }
   }

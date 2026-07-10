@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -10,8 +10,17 @@ import MonthNavigator from '@/components/reflections/MonthNavigator';
 import StreakDisplay from '@/components/reflections/StreakDisplay';
 import { useAppTheme } from '@/hooks/use-app-theme';
 import { useApi } from '@/hooks/use-api';
+import { formatWeekRange } from '@/utils/dateFormatters';
+import { toLocalDateKey } from '@/constants/storage';
 
 const DAYS_IN_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+interface WeeklySummaryItem {
+  id: string;
+  week_start: string;
+  week_end: string;
+  reflection_count: number;
+}
 
 export default function ReflectionsScreen() {
   const router = useRouter();
@@ -24,25 +33,31 @@ export default function ReflectionsScreen() {
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth() + 1);
   const [completedDates, setCompletedDates] = useState<string[]>([]);
+  const [weeklySummaries, setWeeklySummaries] = useState<WeeklySummaryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const fetchCompletedDates = useCallback(async () => {
+  const fetchData = useCallback(async () => {
+    setIsLoading(true);
     try {
-      setIsLoading(true);
-      const data = await get<{ dates: string[] }>('/practice/reflections');
-      setCompletedDates(data.dates ?? []);
+      const reflectionsData = await get<{ dates: string[] }>('/practice/reflections');
+      setCompletedDates(reflectionsData.dates ?? []);
     } catch {
       setCompletedDates([]);
     } finally {
       setIsLoading(false);
     }
+    try {
+      const summariesData = await get<{ summaries: WeeklySummaryItem[] }>('/practice/weekly-summaries');
+      setWeeklySummaries(summariesData.summaries ?? []);
+    } catch {
+      setWeeklySummaries([]);
+    }
   }, [get]);
 
-  // Fetch completed dates when screen gains focus
   useFocusEffect(
     useCallback(() => {
-      fetchCompletedDates();
-    }, [fetchCompletedDates])
+      fetchData();
+    }, [fetchData])
   );
 
   // Calculate streak and stats
@@ -57,8 +72,9 @@ export default function ReflectionsScreen() {
     );
 
     let streak = 0;
-    const todayStr = today.toISOString().split('T')[0];
-    const yesterdayStr = new Date(today.getTime() - 86400000).toISOString().split('T')[0];
+    // Local calendar days — toISOString would use the UTC day.
+    const todayStr = toLocalDateKey(today);
+    const yesterdayStr = toLocalDateKey(new Date(today.getTime() - 86400000));
 
     // Check if streak is active (completed today or yesterday)
     const mostRecent = sortedDates[0];
@@ -66,7 +82,7 @@ export default function ReflectionsScreen() {
       return { currentStreak: 0, totalReflections: completedDates.length };
     }
 
-    // Count consecutive days
+    // Count consecutive days (UTC-parsed dates stepped in UTC — self-consistent)
     let checkDate = new Date(mostRecent);
     for (const dateStr of sortedDates) {
       const expectedStr = checkDate.toISOString().split('T')[0];
@@ -118,6 +134,12 @@ export default function ReflectionsScreen() {
       router.push(`/reflection/${dateString}`);
     }
   }, [year, month, completedDates, router]);
+
+  const handleWeeklyPress = useCallback((weekStart: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.push(`/weekly/${weekStart}`);
+  }, [router]);
+
 
   if (!fontsLoaded || isLoading) {
     return (
@@ -188,7 +210,7 @@ export default function ReflectionsScreen() {
                 day === today.getDate() &&
                 month === today.getMonth() + 1 &&
                 year === today.getFullYear();
-              const isFuture = new Date(dateString) > today;
+              const isFuture = dateString > toLocalDateKey(today);
 
               return (
                 <TouchableOpacity
@@ -222,6 +244,31 @@ export default function ReflectionsScreen() {
             })}
           </View>
         </View>
+
+        {/* Weekly Summaries */}
+        {weeklySummaries.length > 0 && (
+          <View style={styles.weeklySummariesSection}>
+            <Text style={[styles.sectionTitle, { color: palette.text.secondary }]}>WEEKLY MIRRORS</Text>
+            {weeklySummaries.map((item) => (
+              <TouchableOpacity
+                key={item.id}
+                style={[styles.weeklyRow, { backgroundColor: palette.background.secondary }]}
+                onPress={() => handleWeeklyPress(item.week_start)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.weeklyRowContent}>
+                  <Text style={[styles.weeklyRangeText, { color: palette.text.primary }]}>
+                    {formatWeekRange(item.week_start, item.week_end, true)}
+                  </Text>
+                  <Text style={[styles.weeklyCountText, { color: palette.text.muted }]}>
+                    {item.reflection_count} {item.reflection_count === 1 ? 'reflection' : 'reflections'}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={palette.text.muted} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
 
         {/* Empty state */}
         {totalReflections === 0 && (
@@ -347,6 +394,42 @@ const styles = StyleSheet.create({
 
   futureDayText: {
     color: WarmPalette.text.muted,
+  },
+
+  weeklySummariesSection: {
+    marginTop: Spacing.xl,
+    gap: Spacing.sm,
+  },
+
+  sectionTitle: {
+    ...Typography.sectionHeader,
+    color: WarmPalette.text.secondary,
+    marginBottom: Spacing.xs,
+  },
+
+  weeklyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: WarmPalette.background.secondary,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.md,
+  },
+
+  weeklyRowContent: {
+    flex: 1,
+  },
+
+  weeklyRangeText: {
+    ...Typography.body,
+    color: WarmPalette.text.primary,
+    fontWeight: '500',
+  },
+
+  weeklyCountText: {
+    ...Typography.caption,
+    color: WarmPalette.text.muted,
+    marginTop: 2,
   },
 
   emptyState: {

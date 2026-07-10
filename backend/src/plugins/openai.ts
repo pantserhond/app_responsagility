@@ -14,7 +14,7 @@ export async function generateMirrorWithAI(prompt: string): Promise<string> {
   const client = getOpenAIClient()
 
   const response = await client.responses.create({
-    model: 'gpt-4.1-mini',
+    model: process.env.OPENAI_MODEL ?? 'gpt-4.1-mini',
     input: prompt
   })
 

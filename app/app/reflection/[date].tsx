@@ -6,6 +6,7 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -14,9 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { WarmPalette, DarkWarmPalette, Spacing, BorderRadius, Typography } from '@/constants/theme';
 import { useAppTheme } from '@/hooks/use-app-theme';
-
-const API_BASE = 'http://192.168.110.202:3000';
-const CLIENT_ID = 'test-user';
+import { useApi } from '@/hooks/use-api';
 
 interface Reflection {
   react: string;
@@ -39,6 +38,7 @@ export default function DailyReflectionViewer() {
   const theme = useAppTheme();
   const palette = theme === 'dark' ? DarkWarmPalette : WarmPalette;
 
+  const { get } = useApi();
   const [fontsLoaded] = useFonts({ EBGaramond_400Regular });
   const [reflection, setReflection] = useState<Reflection | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -51,8 +51,7 @@ export default function DailyReflectionViewer() {
 
   const fetchReflection = async () => {
     try {
-      const res = await fetch(`${API_BASE}/practice/reflection/${CLIENT_ID}/${date}`);
-      const data = await res.json();
+      const data = await get<Reflection>(`/practice/reflection/${date}`);
       setReflection(data);
     } catch {
       setReflection(null);
@@ -74,6 +73,33 @@ export default function DailyReflectionViewer() {
   const handleBack = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.back();
+  };
+
+  const handleShare = async () => {
+    if (!reflection) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    const formattedDate = formatDate(date!);
+    const lines = [
+      `My Daily Reflection — ${formattedDate}`,
+      '',
+      'My Mirror:',
+      reflection.mirror,
+      '',
+      `Q: ${QUESTIONS.react}`,
+      reflection.react,
+      '',
+      `Q: ${QUESTIONS.respond}`,
+      reflection.respond,
+      '',
+      `Q: ${QUESTIONS.notice}`,
+      reflection.notice,
+      '',
+      `Q: ${QUESTIONS.learn}`,
+      reflection.learn,
+    ];
+
+    await Share.share({ message: lines.join('\n') });
   };
 
   if (!fontsLoaded || isLoading) {
@@ -108,7 +134,9 @@ export default function DailyReflectionViewer() {
           <Ionicons name="arrow-back" size={24} color={palette.text.primary} />
         </TouchableOpacity>
         <Text style={[styles.dateText, { color: palette.text.secondary }]}>{formatDate(date!)}</Text>
-        <View style={styles.backButton} />
+        <TouchableOpacity style={styles.backButton} onPress={handleShare}>
+          <Ionicons name="share-outline" size={24} color={palette.text.primary} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView

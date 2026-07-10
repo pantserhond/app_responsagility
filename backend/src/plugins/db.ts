@@ -6,7 +6,13 @@ export default fp(async (app) => {
 
   const supabase: SupabaseClient = createClient(
     url,
-    serviceRoleKey
+    serviceRoleKey,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    }
   )
 
   app.decorate('supabase', supabase)

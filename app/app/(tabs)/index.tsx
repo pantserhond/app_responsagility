@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, Platform, KeyboardAvoidingView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, Alert, Platform, KeyboardAvoidingView, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -49,7 +49,6 @@ export default function PracticeScreen() {
   const { post, get } = useApi();
 
   const [isLoading, setIsLoading] = useState(true);
-  const [isSending, setIsSending] = useState(false);
   const [answers, setAnswers] = useState<Answers>(initialAnswers);
   const [draftAnswers, setDraftAnswers] = useState<Answers>(initialAnswers);
   const [currentStep, setCurrentStep] = useState(0);
@@ -128,6 +127,28 @@ export default function PracticeScreen() {
         if (data.completed && data.mirror) {
           setShowCompletedState(true);
         }
+        return;
+      }
+
+      // No local data (fresh install / new device) — check the backend
+      // so an already-completed day isn't offered again.
+      try {
+        const remote = await get<Partial<Answers> & { mirror?: string }>(
+          `/practice/reflection/${todayKey}`
+        );
+        if (remote.mirror) {
+          setAnswers({
+            react: remote.react ?? '',
+            respond: remote.respond ?? '',
+            notice: remote.notice ?? '',
+            learn: remote.learn ?? '',
+          } as Answers);
+          setMirror(remote.mirror);
+          setIsCompleted(true);
+          setShowCompletedState(true);
+        }
+      } catch {
+        // 404 (no reflection today) or offline — start fresh.
       }
     } catch (error) {
       console.error('Failed to load practice data:', error);
@@ -197,44 +218,33 @@ export default function PracticeScreen() {
     setDraftAnswers((prev) => ({ ...prev, [step]: newAnswer }));
   }, []);
 
-  // Handle confirming and submitting all answers from review screen
+  // Handle confirming and submitting all answers from review screen.
+  // One idempotent call — safe to retry if it fails.
   const handleReviewConfirm = useCallback(async () => {
     setIsGeneratingMirror(true);
 
     try {
-      // Submit all answers to the backend
-      for (const step of STEPS) {
-        await post('/practice/answer', {
-          date: todayKey,
-          userInput: answers[step],
-        });
-      }
+      const data = await post<{ type: string; text: string }>('/practice/submit', {
+        date: todayKey,
+        ...answers,
+      });
 
-      // The last answer should trigger mirror generation
-      // Fetch the mirror
-      const data = await get<{ mirror?: string }>(`/practice/reflection/${todayKey}`);
-
-      if (data.mirror) {
-        setMirror(data.mirror);
-        setIsCompleted(true);
-        setShowReview(false);
-        setCurrentStep(STEPS.length); // Move to mirror tile
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      } else {
-        // Mirror not ready yet, might need to wait
-        console.warn('Mirror not ready after submission');
-        setMirror('Your reflection is being prepared...');
-        setIsCompleted(true);
-        setShowReview(false);
-        setCurrentStep(STEPS.length);
-      }
+      setMirror(data.text);
+      setIsCompleted(true);
+      setShowReview(false);
+      setCurrentStep(STEPS.length); // Move to mirror tile
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
       console.error('Failed to submit answers:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert(
+        'Something went wrong',
+        'Your answers are safe. Please check your connection and tap the button again.'
+      );
     } finally {
       setIsGeneratingMirror(false);
     }
-  }, [answers, todayKey, post, get]);
+  }, [answers, todayKey, post]);
 
   const handleEditStep = useCallback((stepIndex: number) => {
     setEditingStep(stepIndex);
@@ -246,8 +256,9 @@ export default function PracticeScreen() {
   }, []);
 
   const handleViewReflection = useCallback(() => {
+    setShowCompletedState(true);
     router.push(`/reflection/${todayKey}`);
-  }, [router, todayKey]);
+  }, [router, todayKey, setShowCompletedState]);
 
   const handlePageChange = useCallback((page: number) => {
     // Only allow navigating to completed steps or current step
@@ -317,7 +328,7 @@ export default function PracticeScreen() {
           mirror={mirror}
           currentStep={currentStep}
           editingStep={editingStep}
-          isLoading={isSending}
+          isLoading={isGeneratingMirror}
           onSubmitAnswer={handleSubmitAnswer}
           onDraftChange={handleDraftChange}
           onEditStep={handleEditStep}
@@ -354,18 +365,6 @@ export default function PracticeScreen() {
         </TouchableOpacity>
       )}
     </SafeAreaView>
-  );
-}
-
-// Dev-only reset button component
-function DevResetButton({ onReset }: { onReset: () => void }) {
-  return (
-    <TouchableOpacity
-      style={styles.devButton}
-      onPress={onReset}
-    >
-      <Text style={styles.devButtonText}>Reset</Text>
-    </TouchableOpacity>
   );
 }
 

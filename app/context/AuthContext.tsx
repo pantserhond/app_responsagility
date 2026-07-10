@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
 import { Session, User } from '@supabase/supabase-js'
+import * as Linking from 'expo-linking'
 import { supabase } from '@/lib/supabase'
+import { parseAuthCallback } from '@/lib/auth-utils'
 
 export interface Profile {
   id: string
@@ -28,6 +30,7 @@ interface AuthContextValue {
   signUp: (data: SignUpData) => Promise<{ error: Error | null }>
   signOut: () => Promise<void>
   refreshProfile: () => Promise<void>
+  handleAuthCallback: (url: string) => Promise<{ error: Error | null }>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -48,7 +51,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .single()
 
       if (error) {
-        console.error('Error fetching profile:', error)
+        // PGRST116 = no rows found, which is normal for new/deleted users
+        if (error.code !== 'PGRST116') {
+          console.warn('Error fetching profile:', error)
+        }
         return null
       }
 
@@ -65,6 +71,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
+  // Ensure a profile row exists in the database (needed for foreign key constraints)
+  const ensureProfile = useCallback(async (user: User) => {
+    const { error } = await supabase
+      .from('profiles')
+      .upsert({
+        id: user.id,
+        full_name: user.user_metadata?.full_name ?? '',
+        age: user.user_metadata?.age ?? 0,
+        mobile_number: user.user_metadata?.mobile_number ?? '',
+        email: user.email ?? '',
+      }, { onConflict: 'id' })
+
+    if (error) {
+      console.warn('Failed to ensure profile:', error)
+    }
+  }, [])
+
   const refreshProfile = useCallback(async () => {
     if (user?.id) {
       const userProfile = await fetchProfile(user.id)
@@ -75,27 +98,78 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Initialize auth state
   useEffect(() => {
     // Get initial session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session }, error }) => {
+      if (error) {
+        // Stale/invalid session in storage — clear it
+        console.warn('Clearing invalid stored session:', error.message)
+        await supabase.auth.signOut()
+        setSession(null)
+        setUser(null)
+        setProfile(null)
+        setIsLoading(false)
+        return
+      }
+
       setSession(session)
       setUser(session?.user ?? null)
 
       if (session?.user) {
-        const userProfile = await fetchProfile(session.user.id)
-        setProfile(userProfile)
+        let userProfile = await fetchProfile(session.user.id)
+        if (!userProfile) {
+          // Profile row doesn't exist — create it
+          await ensureProfile(session.user)
+          userProfile = await fetchProfile(session.user.id)
+        }
+        setProfile(userProfile ?? {
+          id: session.user.id,
+          fullName: session.user.user_metadata?.full_name ?? '',
+          age: session.user.user_metadata?.age ?? 0,
+          mobileNumber: session.user.user_metadata?.mobile_number ?? '',
+          email: session.user.email ?? '',
+        })
       }
 
+      setIsLoading(false)
+    }).catch(async (error) => {
+      // Catch any unhandled errors (e.g. failed token refresh)
+      console.warn('Auth initialization error:', error.message)
+      await supabase.auth.signOut()
+      setSession(null)
+      setUser(null)
+      setProfile(null)
       setIsLoading(false)
     })
 
     // Listen for auth changes
+    // IMPORTANT: This callback must be synchronous (no async/await) because
+    // supabase-js awaits subscriber callbacks internally. An async callback
+    // that awaits a DB query would block operations like updateUser/signOut.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
+      (_event, session) => {
         setSession(session)
         setUser(session?.user ?? null)
 
         if (session?.user) {
-          const userProfile = await fetchProfile(session.user.id)
-          setProfile(userProfile)
+          // Set profile from user metadata immediately, then fetch from DB in background
+          const fallbackProfile: Profile = {
+            id: session.user.id,
+            fullName: session.user.user_metadata?.full_name ?? '',
+            age: session.user.user_metadata?.age ?? 0,
+            mobileNumber: session.user.user_metadata?.mobile_number ?? '',
+            email: session.user.email ?? '',
+          }
+          setProfile(fallbackProfile)
+
+          fetchProfile(session.user.id).then(async (dbProfile) => {
+            if (dbProfile) {
+              setProfile(dbProfile)
+            } else {
+              // Profile row doesn't exist — create it
+              await ensureProfile(session.user)
+              const created = await fetchProfile(session.user.id)
+              if (created) setProfile(created)
+            }
+          })
         } else {
           setProfile(null)
         }
@@ -128,12 +202,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         email: data.email,
         password: data.password,
         options: {
+          emailRedirectTo: Linking.createURL('auth/callback'),
           data: {
             full_name: data.fullName,
             age: data.age,
             mobile_number: data.mobileNumber,
           },
         },
+      })
+
+      if (error) {
+        return { error }
+      }
+
+      return { error: null }
+    } catch (error) {
+      return { error: error as Error }
+    }
+  }, [])
+
+  const handleAuthCallback = useCallback(async (url: string) => {
+    try {
+      const { access_token, refresh_token } = parseAuthCallback(url)
+
+      if (!access_token || !refresh_token) {
+        return { error: new Error('Missing tokens in callback URL') }
+      }
+
+      const { error } = await supabase.auth.setSession({
+        access_token,
+        refresh_token,
       })
 
       if (error) {
@@ -165,6 +263,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signUp,
         signOut,
         refreshProfile,
+        handleAuthCallback,
       }}
     >
       {children}

@@ -5,20 +5,20 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Linking,
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import Constants from 'expo-constants';
 import { WarmPalette, DarkWarmPalette, Spacing, BorderRadius, Typography } from '@/constants/theme';
 import { useSettings } from '@/context/SettingsContext';
 import { useAuth } from '@/context/AuthContext';
+import { useApi } from '@/hooks/use-api';
 import { useAppTheme } from '@/hooks/use-app-theme';
 import SettingsSection from '@/components/settings/SettingsSection';
 import SettingsRow from '@/components/settings/SettingsRow';
-import CoachEmailForm from '@/components/settings/CoachEmailForm';
 import NotificationSettings from '@/components/settings/NotificationSettings';
 
 type Theme = 'light' | 'dark' | 'system';
@@ -34,10 +34,11 @@ export default function SettingsScreen() {
     settings,
     updateSettings,
     updateNotifications,
-    updateCoach,
     updateProfile,
   } = useSettings();
-  const { profile, signOut } = useAuth();
+  const { profile, user, signOut } = useAuth();
+  const { fetchWithAuth } = useApi();
+  const router = useRouter();
 
   const theme = useAppTheme();
   const palette = theme === 'dark' ? DarkWarmPalette : WarmPalette;
@@ -62,6 +63,28 @@ export default function SettingsScreen() {
     );
   }, [signOut]);
 
+  const handleDeleteAccount = useCallback(() => {
+    Alert.alert(
+      'Delete Account',
+      'This permanently deletes your account and all your reflections. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await fetchWithAuth('/account', { method: 'DELETE' });
+              await signOut();
+            } catch {
+              Alert.alert('Something went wrong', 'Your account was not deleted. Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  }, [fetchWithAuth, signOut]);
+
   const handleThemeChange = useCallback(
     async (theme: Theme) => {
       Haptics.selectionAsync();
@@ -69,20 +92,6 @@ export default function SettingsScreen() {
       setShowThemePicker(false);
     },
     [updateSettings]
-  );
-
-  const handleCoachSave = useCallback(
-    async (email: string | null, name: string | null) => {
-      await updateCoach({ email, name });
-    },
-    [updateCoach]
-  );
-
-  const handleCoachShareToggle = useCallback(
-    async (enabled: boolean) => {
-      await updateCoach({ shareWeeklySummary: enabled });
-    },
-    [updateCoach]
   );
 
   const handleNotificationToggle = useCallback(
@@ -130,7 +139,7 @@ export default function SettingsScreen() {
             </View>
             <View style={styles.profileInfo}>
               <Text style={[styles.profileName, { color: palette.text.primary }]}>
-                {settings.profile.displayName || profile?.fullName || 'Anonymous Reflector'}
+                {settings.profile.displayName || profile?.fullName || user?.user_metadata?.full_name || 'Anonymous Reflector'}
               </Text>
               <Text style={[styles.profileDate, { color: palette.text.secondary }]}>
                 Member since {formatMemberSince(settings.profile.startDate)}
@@ -194,30 +203,33 @@ export default function SettingsScreen() {
           />
         </SettingsSection>
 
-        {/* Coach Integration Section */}
-        <SettingsSection title="Coach Integration" theme={theme}>
-          <CoachEmailForm
-            email={settings.coach.email}
-            coachName={settings.coach.name}
-            shareEnabled={settings.coach.shareWeeklySummary}
-            onSave={handleCoachSave}
-            onToggleShare={handleCoachShareToggle}
-            theme={theme}
-          />
-        </SettingsSection>
-
         {/* Account Section */}
         <SettingsSection title="Account" theme={theme}>
           <SettingsRow
             label="Email"
             type="value"
-            value={profile?.email ?? ''}
+            value={profile?.email || user?.email || ''}
+            theme={theme}
+          />
+          <SettingsRow
+            label="Change Password"
+            type="navigation"
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push('/change-password');
+            }}
             theme={theme}
           />
           <SettingsRow
             label="Sign Out"
             type="navigation"
             onPress={handleLogout}
+            theme={theme}
+          />
+          <SettingsRow
+            label="Delete Account"
+            type="navigation"
+            onPress={handleDeleteAccount}
             showBorder={false}
             theme={theme}
           />

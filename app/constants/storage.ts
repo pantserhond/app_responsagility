@@ -26,9 +26,17 @@ export const getPracticeKey = (date: string): string =>
   `${STORAGE_KEYS.PRACTICE_PREFIX}${date}`;
 
 /**
- * Get today's date in YYYY-MM-DD format.
+ * Format a date as YYYY-MM-DD in the device's local timezone.
+ * (toISOString would shift the day near midnight for non-UTC users.)
  */
-export const getTodayKey = (): string => {
-  const today = new Date();
-  return today.toISOString().split('T')[0];
+export const toLocalDateKey = (date: Date): string => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 };
+
+/**
+ * Get today's date in YYYY-MM-DD format (local timezone).
+ */
+export const getTodayKey = (): string => toLocalDateKey(new Date());

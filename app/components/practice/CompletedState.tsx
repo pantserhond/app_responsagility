@@ -42,7 +42,7 @@ export default function CompletedState({ onNavigate, theme = 'light' }: Complete
       </Animated.View>
 
       <Animated.View style={fadeStyle}>
-        <Text style={[styles.title, { color: palette.text.primary }]}>You've reflected today</Text>
+        <Text style={[styles.title, { color: palette.text.primary }]}>You’ve reflected today</Text>
         <Text style={[styles.subtitle, { color: palette.text.secondary }]}>
           Take a moment to revisit your thoughts
         </Text>
@@ -53,7 +53,7 @@ export default function CompletedState({ onNavigate, theme = 'light' }: Complete
           activeOpacity={0.8}
         >
           <Text style={[styles.viewButtonText, { color: palette.text.inverse }]}>
-            View Today's Reflection
+            View Today’s Reflection
           </Text>
           <Ionicons name="arrow-forward" size={18} color={palette.text.inverse} />
         </TouchableOpacity>

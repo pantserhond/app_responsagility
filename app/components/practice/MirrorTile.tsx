@@ -70,7 +70,7 @@ export default function MirrorTile({
               color={palette.success}
             />
             <Text style={[styles.completionText, { color: palette.text.secondary }]}>
-              Today's reflection is complete
+              Today’s reflection is complete
             </Text>
           </View>
         </Animated.View>

@@ -1,191 +1,102 @@
 import { FastifyInstance } from 'fastify'
-import {
-  advanceFlow,
-  ReflectionStep,
-  ReflectionState,
-  PROMPTS
-} from '../../domain/reflections/flow'
 import { generateDailyMirror } from '../../domain/reflections/mirror'
-import { getDailyReflection } from '../../domain/reflections/flow'
+import { getDailyReflection } from '../../domain/reflections/queries'
 
-interface PracticeAnswerBody {
+interface PracticeSubmitBody {
   date: string // YYYY-MM-DD
-  userInput: string
+  react: string
+  respond: string
+  notice: string
+  learn: string
 }
 
+const answerSchema = { type: 'string', minLength: 1, maxLength: 5000 }
+
+const submitBodySchema = {
+  type: 'object',
+  required: ['date', 'react', 'respond', 'notice', 'learn'],
+  properties: {
+    date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+    react: answerSchema,
+    respond: answerSchema,
+    notice: answerSchema,
+    learn: answerSchema,
+  },
+} as const
+
 export async function practiceRoutes(app: FastifyInstance) {
-  app.post<{ Body: PracticeAnswerBody }>(
-    '/practice/answer',
-    { preHandler: app.authenticate },
+  /*
+    Submit a full day's reflection in one call.
+    Idempotent: if a mirror already exists for this date, it is returned
+    unchanged (safe to retry after a network failure).
+  */
+  app.post<{ Body: PracticeSubmitBody }>(
+    '/practice/submit',
+    { preHandler: app.authenticate, schema: { body: submitBodySchema } },
     async (request, reply) => {
-      const { date, userInput } = request.body
+      const { date } = request.body
       const clientId = request.user.id
 
-      /*
-        Load or create today's reflection
-      */
-      const { data: existing, error } = await app.supabase
+      const answers = {
+        react: request.body.react.trim(),
+        respond: request.body.respond.trim(),
+        notice: request.body.notice.trim(),
+        learn: request.body.learn.trim(),
+      }
+
+      if (Object.values(answers).some((a) => a.length === 0)) {
+        return reply.status(400).send({ error: 'All four answers are required' })
+      }
+
+      const { data: existing } = await app.supabase
         .from('daily_reflections')
-        .select('*')
+        .select('daily_mirror')
         .eq('client_id', clientId)
         .eq('reflection_date', date)
-        .single()
+        .maybeSingle()
 
-      let reflection = existing
-
-      if (error && error.code === 'PGRST116') {
-        const { data: created, error: insertError } =
-          await app.supabase
-            .from('daily_reflections')
-            .insert({
-              client_id: clientId,
-              reflection_date: date,
-              step: 'react'
-            })
-            .select()
-            .single()
-
-        if (insertError || !created) {
-          return reply.status(500).send({ error: 'Failed to create reflection' })
-        }
-
-        reflection = created
+      if (existing?.daily_mirror) {
+        return reply.send({ type: 'mirror', text: existing.daily_mirror })
       }
 
-      if (!reflection) {
-        return reply.status(500).send({ error: 'Reflection state invalid' })
+      const { error: upsertError } = await app.supabase
+        .from('daily_reflections')
+        .upsert(
+          {
+            client_id: clientId,
+            reflection_date: date,
+            ...answers,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'client_id,reflection_date' }
+        )
+
+      if (upsertError) {
+        app.log.error({ err: upsertError }, 'Failed to save reflection')
+        return reply.status(500).send({ error: 'Failed to save reflection' })
       }
 
-      if (reflection.step === 'review' && reflection.daily_mirror) {
-        return reply.send({
-        type: 'completed',
-          text: reflection.daily_mirror,
-        })
+      let mirrorText: string
+      try {
+        mirrorText = await generateDailyMirror(answers)
+      } catch (err) {
+        app.log.error({ err }, 'Mirror generation failed')
+        // Answers are saved — the client can retry this exact call safely.
+        return reply.status(502).send({ error: 'Mirror generation failed, please try again' })
       }
 
-      /*
-        Advance domain flow
-      */
-      const currentState: ReflectionState = {
-        clientId,
-        date,
-        step: reflection.step as ReflectionStep
+      const { error: mirrorError } = await app.supabase
+        .from('daily_reflections')
+        .update({ daily_mirror: mirrorText, updated_at: new Date().toISOString() })
+        .eq('client_id', clientId)
+        .eq('reflection_date', date)
+
+      if (mirrorError) {
+        app.log.error({ err: mirrorError }, 'Failed to save mirror')
+        return reply.status(500).send({ error: 'Failed to save mirror' })
       }
 
-      const flowResult = advanceFlow(currentState, userInput)
-
-      /*
-        Persist answer for CURRENT step
-      */
-      const stepFieldMap: Record<ReflectionStep, string | null> = {
-        react: 'react',
-        respond: 'respond',
-        notice: 'notice',
-        learn: 'learn',
-        review: null
-      }
-
-      const field = stepFieldMap[currentState.step]
-
-      if (field) {
-        await app.supabase
-          .from('daily_reflections')
-          .update({
-            [field]: userInput,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', reflection.id)
-      }
-
-      /*
-        Persist next step
-      */
-      if (flowResult.nextState) {
-        await app.supabase
-          .from('daily_reflections')
-          .update({
-            step: flowResult.nextState.step,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', reflection.id)
-      }
-
-      /*
-        If review step reached, generate mirror
-        But first verify all 4 answers exist
-      */
-      if (flowResult.nextState?.step === 'review') {
-        // Re-fetch the reflection to get all saved answers
-        const { data: updatedReflection } = await app.supabase
-          .from('daily_reflections')
-          .select('*')
-          .eq('id', reflection.id)
-          .single()
-
-        // Validate all 4 answers exist before generating mirror
-        const answers = {
-          react: updatedReflection?.react,
-          respond: updatedReflection?.respond,
-          notice: updatedReflection?.notice,
-          learn: userInput, // This was just submitted
-        }
-
-        const missingAnswers = Object.entries(answers)
-          .filter(([_, value]) => !value || value.trim().length === 0)
-          .map(([key]) => key)
-
-        if (missingAnswers.length > 0) {
-          // Not all answers provided - go back to the first missing step
-          console.error(`Missing answers for mirror generation: ${missingAnswers.join(', ')}`)
-
-          // Find the first missing step and go back to it
-          const stepOrder: ReflectionStep[] = ['react', 'respond', 'notice', 'learn']
-          const firstMissing = stepOrder.find(step => missingAnswers.includes(step)) || 'react'
-
-          await app.supabase
-            .from('daily_reflections')
-            .update({
-              step: firstMissing,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', reflection.id)
-
-          return reply.send({
-            type: 'question',
-            text: PROMPTS[firstMissing]
-          })
-        }
-
-        // All answers validated - safe to cast
-        const mirrorText = await generateDailyMirror({
-          react: answers.react!,
-          respond: answers.respond!,
-          notice: answers.notice!,
-          learn: answers.learn!,
-        })
-
-        await app.supabase
-          .from('daily_reflections')
-          .update({
-            daily_mirror: mirrorText,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', reflection.id)
-
-        return reply.send({
-          type: 'mirror',
-          text: mirrorText
-        })
-      }
-
-
-      /*
-        Otherwise, return next prompt
-      */
-      return reply.send({
-        type: 'question',
-        text: flowResult.nextPrompt
-      })
+      return reply.send({ type: 'mirror', text: mirrorText })
     }
   )
 
@@ -196,8 +107,7 @@ export async function practiceRoutes(app: FastifyInstance) {
       const { date } = request.params as { date: string }
       const clientId = request.user.id
 
-      const supabase = request.server.supabase
-      const reflection = await getDailyReflection(supabase, clientId, date)
+      const reflection = await getDailyReflection(app.supabase, clientId, date)
 
       if (!reflection) {
         return reply.code(404).send({
@@ -222,12 +132,11 @@ export async function practiceRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const clientId = request.user.id
 
-      const supabase = request.server.supabase
-
-      const { data, error } = await supabase
+      const { data, error } = await app.supabase
         .from('daily_reflections')
         .select('reflection_date')
         .eq('client_id', clientId)
+        .not('daily_mirror', 'is', null)
         .order('reflection_date', { ascending: true })
 
       if (error) {
@@ -239,6 +148,52 @@ export async function practiceRoutes(app: FastifyInstance) {
       return {
         dates: data.map((row) => row.reflection_date),
       }
+    }
+  )
+
+  app.get(
+    '/practice/weekly-summaries',
+    { preHandler: app.authenticate },
+    async (request, reply) => {
+      const clientId = request.user.id
+
+      const { data, error } = await app.supabase
+        .from('weekly_summaries')
+        .select('id, week_start, week_end, summary_text, reflection_count')
+        .eq('client_id', clientId)
+        .order('week_start', { ascending: false })
+
+      if (error) {
+        return reply.code(500).send({ error: 'Failed to fetch weekly summaries' })
+      }
+
+      return { summaries: data ?? [] }
+    }
+  )
+
+  app.get(
+    '/practice/weekly-summary/:weekStart',
+    { preHandler: app.authenticate },
+    async (request, reply) => {
+      const { weekStart } = request.params as { weekStart: string }
+      const clientId = request.user.id
+
+      const { data, error } = await app.supabase
+        .from('weekly_summaries')
+        .select('id, week_start, week_end, summary_text, reflection_count')
+        .eq('client_id', clientId)
+        .eq('week_start', weekStart)
+        .maybeSingle()
+
+      if (error) {
+        return reply.code(500).send({ error: 'Failed to fetch weekly summary' })
+      }
+
+      if (!data) {
+        return reply.code(404).send({ error: 'Weekly summary not found' })
+      }
+
+      return data
     }
   )
 }

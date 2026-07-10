@@ -21,7 +21,7 @@ function Dot({
 }: {
   isActive: boolean;
   isCompleted: boolean;
-  palette: typeof WarmPalette;
+  palette: typeof WarmPalette | typeof DarkWarmPalette;
 }) {
   const animatedStyle = useAnimatedStyle(() => {
     const scale = withSpring(isActive ? 1.2 : 1, { damping: 15, stiffness: 200 });

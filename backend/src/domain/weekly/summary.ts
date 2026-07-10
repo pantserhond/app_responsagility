@@ -1,4 +1,5 @@
 import { generateMirrorWithAI } from '../../plugins/openai'
+import { MIRROR_VOICE } from '../reflections/mirror'
 
 type WeeklyReflection = {
   react: string
@@ -30,24 +31,21 @@ ${r.learn}
     .join('\n\n---\n\n')
 
   const prompt = `
+${MIRROR_VOICE}
+
 Below are daily Responsagility reflections from the same person across one week.
 
-Reflect:
+Write a weekly mirror that reflects:
 - common reactions
 - common responses
 - repeated noticings
 - key learnings
 - a short theme of the week
 
-Constraints:
-- No advice
-- No fixing
-- Warm, grounded, human tone
+Keep it concise: one or two short paragraphs.
 
 Reflections:
 ${compiled}
-
-Write a weekly mirror.
 `.trim()
 
   return generateMirrorWithAI(prompt)

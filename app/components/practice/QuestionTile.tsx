@@ -71,8 +71,8 @@ export default function QuestionTile({
   const [inputValue, setInputValue] = useState(draftAnswer || answer);
   const [isHolding, setIsHolding] = useState(false);
   const inputRef = useRef<TextInput>(null);
-  const holdTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const hapticIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const holdTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hapticIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { animatedStyle: slideStyle, slideIn } = useSlideUpAnimation();
   const { animatedStyle: buttonStyle, onPressIn, onPressOut } = usePressAnimation();
 

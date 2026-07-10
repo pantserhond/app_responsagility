@@ -99,7 +99,7 @@ export default function ReadyPrompt({ onReady, onNotNow, theme = 'light' }: Read
             activeOpacity={0.8}
           >
             <Text style={[styles.primaryButtonText, { color: palette.text.inverse }]}>
-              Yes, I'm ready
+              Yes, I’m ready
             </Text>
             <Ionicons name="arrow-forward" size={18} color={palette.text.inverse} style={{ marginLeft: 8 }} />
           </TouchableOpacity>
